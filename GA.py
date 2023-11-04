@@ -2,7 +2,7 @@ import numpy as np
 
 
 class Individual:
-    # for generating a new individual from a sequence
+    # for generating a new individual from a sequence (used to make generation 0)
     def new(seq: list[str], w_gap: int, w_mismatch: int) -> "Individual":
         self = Individual()
         self.w_gap = w_gap
@@ -24,24 +24,32 @@ class Individual:
         return self
 
     def evaluate(self) -> float:
-        g_count = self.gap.sum()  # count the number of gaps
-        m_count = sum([np.unique(i).shape[0] - 1 for i in self._cur_seq().T])  # count number of unique chars per col
-        return -(self.w_gap * g_count + self.w_mismatch * m_count)
+        matches = sum([
+            max([*[x[1] for x in zip(*np.unique(col, return_counts=True)) if chr(x[0]) != "-"], 1]) - 1
+            for col in self._cur_seq().T
+        ])
+        # gaps = self.gap.sum(axis=1).max() * self.gap.shape[0]
+        return matches
 
     def mutate(self, p: float) -> None:
         idx = np.random.rand(*self.gap.shape) < p  # select indices to mutate
-        self.gap[idx] = [np.random.randint(1, 10) for _ in range(idx.sum())]  # mutate with rand val between 1 and 10
+        self.gap[idx] = [self._random_gap() for _ in range(idx.sum())]  # mutate with rand val between 1 and 10
+
+    def _random_gap(self) -> int:
+        return np.random.randint(0, self.seq.shape[1])
 
     # get the sequence the individual currently represents (including the gaps)
     def _cur_seq(self) -> list[str]:
         max_len = self.gap.sum(axis=1).max()  # maximum gap count (for padding)
         stacked = np.dstack([self.seq, self.gap])  # combine seq and gap arrays, so its easier to iterate
-        return np.array([
+        raw_out = np.array([
             bytearray(
                 "".join(["-" * s[1] + chr(s[0]) for s in seq]) +  # '-' * gap + char
                 "-" * (max_len - seq[:, 1].sum()), "utf-8"  # pad with '-'s
             ) for seq in stacked
         ], dtype=int)  # convert string back to ascii int array
+
+        return np.array([col for col in raw_out.T if "".join([chr(c) for c in col]).strip("-") != ""]).T
 
     # pretty print
     def __str__(self) -> str:
@@ -52,50 +60,49 @@ class Population:
     def __init__(self, seq: list[str], w_gap: int, w_mismatch: int, pop_count: int) -> None:
         self.individuals = [Individual.new(seq, w_gap, w_mismatch) for _ in range(pop_count)]  # init individuals
 
+    def clear_individuals(self):
+        self.individuals.clear()
+
     # return the best individual
     def best(self) -> Individual:
         return max(self.individuals, key=lambda ind: ind.evaluate())
 
-    # TODO: this part is a bit sketchy
-    def eval_and_crossover(self, p: float) -> None:
+    def next_gen(self) -> None:
         orig_len = len(self.individuals)
 
-        # TODO: not roulette selection
-        self.individuals = sorted(self.individuals, key=lambda ind: ind.evaluate(), reverse=True)  # sort by score
-        self.individuals = self.individuals[int(len(self.individuals) * p):]  # select top p% of individuals
+        # Roulette Selection
+        p = np.array([ind.evaluate() for ind in self.individuals])
+        p = p / p.sum() if p.sum() != 0 else np.ones(p.shape[0]) / p.shape[0]
 
-        # generate new individuals
-        self.individuals = [
-            Individual.from_parents(
-                np.random.choice(self.individuals),  # randomly sample a parents
-                np.random.choice(self.individuals)  # randomly sample a parents
-            ) for _ in range(orig_len)  # re-populate
-        ]
+        new_individuals = []
+        for _ in range(orig_len):
+            parent_1 = np.random.choice(self.individuals, p=p)
+            parent_2 = np.random.choice(self.individuals, p=p)
+            new_individuals.append(Individual.from_parents(parent_1, parent_2))
+
+        self.individuals = new_individuals
 
     def mutate(self, p: float) -> None:
         [ind.mutate(p) for ind in self.individuals]
 
     # pretty print
     def __str__(self) -> str:
-        return "==== Population ====\n\n" + "\n".join([str(ind) for ind in self.individuals])
+        self.individuals = sorted(self.individuals, key=lambda ind: ind.evaluate(), reverse=True)
+        # return "\n".join([str(ind) for ind in self.individuals])
+        # return "Population: " + ", ".join([str(ind.evaluate()) for ind in self.individuals])
+        return str(self.best())
 
 
 # some similar-ish sequences (TODO: probably a horrible example)
 sequences = [
-    "CGTGGGTGTGTTCTGTG",
-    "CGTGGTGGGTTCTGTAG",
-    "CGTGGATGTGTACGGTG",
-    "CGGGGATGGTGTTCTGT",
+    "AAA1111CC",
+    "22AAACC22",
+    "333333AAA",
 ]
 
-# for testing mutation:
+pop = Population(sequences, 1, 1, 100)
 
-pop = Population(sequences, 1, 1, 10)
-
-print(pop)
-
-pop.mutate(0.01)
-
-print(pop)
-
-# TODO: the GA should technically work (all the code is there) but in reality, not so great
+for i in range(1000):
+    print(pop)
+    pop.next_gen()
+    pop.mutate(0.01)
